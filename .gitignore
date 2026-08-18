@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.Python
+build/
+dist/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Trained models & class maps (large binaries, regenerate via veri_arttırma/ + yapay_zeka/app.py)
+*.h5
+*.keras
+*.tflite
+*.pb
+
+# Datasets (regenerate via veri_arttırma/veri_seti.py, or keep out of git)
+veri_arttırma/augmented_dataset/
+sunucu/dataset/
+
+# Runtime-uploaded / captured images
+sunucu/static/latest.jpg
+tahmin_sitesi/uploads/*
+!tahmin_sitesi/uploads/.gitkeep
+
+# Logs & generated reports
+*.log
+model_results*.txt
+
+# IDE
+.vscode/
+.idea/
+
+# Arduino / ESP-IDF build artifacts
+esp_code/**/build/
+*.bin
+
+# OS
+.DS_Store
+Thumbs.db

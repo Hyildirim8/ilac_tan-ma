@@ -19,16 +19,18 @@ env/
 
 # Datasets (regenerate via veri_arttırma/veri_seti.py, or keep out of git)
 veri_arttırma/augmented_dataset/
-sunucu/dataset/
+web/dataset/
+web/augmented_dataset/
 
 # Runtime-uploaded / captured images
-sunucu/static/latest.jpg
-tahmin_sitesi/uploads/*
-!tahmin_sitesi/uploads/.gitkeep
+web/static/latest.jpg
+web/uploads/*
+!web/uploads/.gitkeep
 
 # Logs & generated reports
 *.log
 model_results*.txt
+model_results.json
 
 # IDE
 .vscode/
@@ -37,6 +39,9 @@ model_results*.txt
 # Arduino / ESP-IDF build artifacts
 esp_code/**/build/
 *.bin
+
+# WiFi credentials (see secrets.h.example for the template)
+esp_code/**/secrets.h
 
 # OS
 .DS_Store

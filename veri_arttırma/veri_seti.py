@@ -2,8 +2,8 @@ import os
 from tensorflow.keras.preprocessing.image import ImageDataGenerator, load_img, img_to_array, save_img
 
 # Kaynak ve hedef klasörler
-dataset_dir = "../sunucu/dataset"       # ilac_A, ilac_B klasörleri
-augmented_dir = "augmented_dataset"
+dataset_dir = "../web/dataset"       # ilac_A, ilac_B klasörleri
+augmented_dir = "../web/augmented_dataset"
 
 # Oluştur, yoksa
 if not os.path.exists(augmented_dir):

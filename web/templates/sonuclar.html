@@ -1,0 +1,144 @@
+{% extends "base.html" %}
+{% block title %}Toplam Sonuçlar — İlaç Tanıma Sistemi{% endblock %}
+{% block head %}
+<style>
+  .section-title { font-size: 18px; font-weight: bold; color: #333; margin: 28px 0 12px; }
+  .section-title:first-of-type { margin-top: 0; }
+  .chart-wrap { background: #fafafa; border: 1px solid #eee; border-radius: 8px; padding: 16px; overflow-x: auto; }
+  .bar-label { font-size: 12px; fill: #333; }
+  .bar-value { font-size: 12px; fill: #333; font-weight: bold; }
+  .axis-line { stroke: #ccc; stroke-width: 1; }
+  .empty-note { color: #888; font-size: 14px; text-align: center; padding: 40px 0; }
+  .best-model-box {
+    background: #fff8e1; border: 1px solid #ffe082; border-radius: 8px;
+    padding: 16px; margin-bottom: 20px; text-align: center;
+  }
+  .best-model-box .name { font-size: 20px; font-weight: bold; color: #f57f17; }
+</style>
+{% endblock %}
+{% block content %}
+  <h1>📊 Toplam Sonuçlar</h1>
+  <div id="resultsRoot">
+    <div class="empty-note">Yükleniyor...</div>
+  </div>
+{% endblock %}
+{% block scripts %}
+<script>
+  function barChart(svgId, entries, opts) {
+    const svg = document.getElementById(svgId);
+    const width = Math.max(600, entries.length * 90);
+    const height = 320;
+    const marginBottom = 90;
+    const marginTop = 20;
+    const chartHeight = height - marginBottom - marginTop;
+    const barWidth = Math.min(60, (width / entries.length) - 20);
+
+    svg.setAttribute("width", width);
+    svg.setAttribute("height", height);
+    svg.innerHTML = "";
+
+    const maxVal = opts.log
+      ? Math.log10(Math.max(...entries.map((e) => e.value), 10))
+      : Math.max(...entries.map((e) => e.value), opts.maxHint || 0);
+
+    const ns = "http://www.w3.org/2000/svg";
+
+    const axis = document.createElementNS(ns, "line");
+    axis.setAttribute("x1", 40);
+    axis.setAttribute("y1", marginTop + chartHeight);
+    axis.setAttribute("x2", width - 10);
+    axis.setAttribute("y2", marginTop + chartHeight);
+    axis.setAttribute("class", "axis-line");
+    svg.appendChild(axis);
+
+    entries.forEach((entry, i) => {
+      const x = 50 + i * ((width - 60) / entries.length);
+      const rawVal = opts.log ? Math.log10(Math.max(entry.value, 1)) : entry.value;
+      const barH = maxVal > 0 ? (rawVal / maxVal) * chartHeight : 0;
+      const y = marginTop + chartHeight - barH;
+
+      const rect = document.createElementNS(ns, "rect");
+      rect.setAttribute("x", x);
+      rect.setAttribute("y", y);
+      rect.setAttribute("width", barWidth);
+      rect.setAttribute("height", Math.max(barH, 1));
+      rect.setAttribute("fill", entry.color || "#2196f3");
+      rect.setAttribute("rx", 3);
+      svg.appendChild(rect);
+
+      const valueText = document.createElementNS(ns, "text");
+      valueText.setAttribute("x", x + barWidth / 2);
+      valueText.setAttribute("y", y - 6);
+      valueText.setAttribute("text-anchor", "middle");
+      valueText.setAttribute("class", "bar-value");
+      valueText.textContent = entry.valueLabel;
+      svg.appendChild(valueText);
+
+      const label = document.createElementNS(ns, "text");
+      label.setAttribute("x", x + barWidth / 2);
+      label.setAttribute("y", marginTop + chartHeight + 16);
+      label.setAttribute("text-anchor", "end");
+      label.setAttribute("class", "bar-label");
+      label.setAttribute("transform", `rotate(-40 ${x + barWidth / 2} ${marginTop + chartHeight + 16})`);
+      label.textContent = entry.label;
+      svg.appendChild(label);
+    });
+  }
+
+  async function loadResults() {
+    const root = document.getElementById("resultsRoot");
+    try {
+      const res = await fetch("/api/model_results");
+      const data = await res.json();
+
+      if (!data.available || Object.keys(data.results).length === 0) {
+        root.innerHTML = '<div class="empty-note">Henüz eğitim sonucu yok. <code>yapay_zeka/app.py</code> ile modelleri eğitip <code>model_results.json</code> dosyasını <code>web/model/</code> altına kopyalayın.</div>';
+        return;
+      }
+
+      const entries = Object.entries(data.results);
+      const bestModel = entries.reduce((a, b) => (b[1].val_accuracy > a[1].val_accuracy ? b : a));
+
+      root.innerHTML = `
+        <div class="best-model-box">
+          🏆 En İyi Model: <span class="name">${bestModel[0]}</span>
+          — Accuracy: ${(bestModel[1].val_accuracy * 100).toFixed(2)}%
+        </div>
+        <div class="section-title">Validation Accuracy (Model Bazında)</div>
+        <div class="chart-wrap"><svg id="accChart"></svg></div>
+        <div class="section-title">Parametre Sayısı (Log Ölçek)</div>
+        <div class="chart-wrap"><svg id="paramChart"></svg></div>
+      `;
+
+      const sorted = entries.sort((a, b) => b[1].val_accuracy - a[1].val_accuracy);
+
+      barChart(
+        "accChart",
+        sorted.map(([name, r]) => ({
+          label: name,
+          value: r.val_accuracy,
+          valueLabel: (r.val_accuracy * 100).toFixed(1) + "%",
+          color: name === bestModel[0] ? "#4caf50" : "#2196f3",
+        })),
+        { maxHint: 1.0 }
+      );
+
+      barChart(
+        "paramChart",
+        sorted.map(([name, r]) => ({
+          label: name,
+          value: r.params,
+          valueLabel: (r.params / 1000).toFixed(0) + "K",
+          color: "#ff9800",
+        })),
+        { log: true }
+      );
+    } catch (e) {
+      root.innerHTML = '<div class="empty-note">Sonuçlar yüklenirken hata oluştu.</div>';
+      console.error(e);
+    }
+  }
+
+  window.onload = loadResults;
+</script>
+{% endblock %}

@@ -1,6 +1,7 @@
 #include "esp_camera.h"
 #include <WiFi.h>
 #include <HTTPClient.h>
+#include "secrets.h"
 
 // ESP32-CAM PIN config (AI-Thinker)
 #define PWDN_GPIO_NUM     32
@@ -21,10 +22,10 @@
 #define HREF_GPIO_NUM     23
 #define PCLK_GPIO_NUM     22
 
-// WiFi ve sunucu ayarları
-const char* ssid = "hy";
-const char* password = "12345678";
-const char* serverName = "http://192.168.149.144:5000/upload_esp"; // FastAPI endpoint
+// WiFi ve sunucu ayarları (WiFi bilgileri secrets.h'ten gelir, git'e girmez)
+const char* ssid = WIFI_SSID;
+const char* password = WIFI_PASSWORD;
+const char* serverName = "http://10.42.101.18:5050/upload_esp"; // FastAPI endpoint (web/ Docker servisi, host port 5050)
 
 // Flash kontrol
 #define FLASH_GPIO 4   // ESP32-CAM üzerindeki LED

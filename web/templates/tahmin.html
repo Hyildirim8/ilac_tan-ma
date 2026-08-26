@@ -1,0 +1,184 @@
+{% extends "base.html" %}
+{% block title %}Veri Tahmini — İlaç Tanıma Sistemi{% endblock %}
+{% block head %}
+<style>
+  .grid { display: grid; grid-template-columns: 320px 1fr; gap: 24px; align-items: start; }
+  #preview { border: 2px solid #ddd; border-radius: 8px; width: 100%; object-fit: contain; background: #fafafa; }
+  .prediction-box { background: #e3f2fd; border: 2px solid #2196f3; border-radius: 8px; padding: 20px; margin-bottom: 20px; text-align: center; }
+  .drug-name { font-size: 24px; font-weight: bold; color: #1976d2; margin-bottom: 10px; }
+  .confidence { font-size: 18px; color: #666; margin-bottom: 10px; }
+  .timestamp { font-size: 14px; color: #999; }
+  .voting-details { background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 8px; padding: 15px; margin: 20px 0; }
+  .voting-title { font-size: 18px; font-weight: bold; color: #495057; margin-bottom: 15px; text-align: center; }
+  .vote-item { display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; margin: 5px 0; border-radius: 5px; background: #ffffff; border: 1px solid #e9ecef; }
+  .vote-item.winner { background: #d4edda; border-color: #c3e6cb; font-weight: bold; }
+  .model-info { background: #fff3cd; border: 1px solid #ffeaa7; border-radius: 5px; padding: 10px; margin: 10px 0; font-size: 14px; }
+  .ensemble-methods { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 15px; margin: 20px 0; }
+  .method-box { border: 1px solid #ddd; border-radius: 8px; padding: 15px; text-align: center; }
+  .method-box.active { border-color: #4caf50; background-color: #f0fff0; }
+  .method-title { font-weight: bold; margin-bottom: 10px; color: #333; }
+  .method-result { font-size: 16px; color: #666; }
+  .method-confidence { font-size: 14px; color: #888; margin-top: 5px; }
+</style>
+{% endblock %}
+{% block content %}
+  <h1>🔬 İlaç Tanıma Sistemi — Tahmin</h1>
+
+  <div class="status waiting" id="status">ESP32'den resim bekleniyor...</div>
+
+  <div class="grid">
+    <div>
+      <img id="preview" src="/latest.jpg" alt="latest image" />
+      <div class="model-info" id="modelInfo">
+        <strong>Model Bilgileri:</strong>
+        <span id="modelCount">{{ model_count if model_count else 0 }}</span>
+        model yüklendi<br />
+        <span id="modelNames">{{ available_models|join(', ') if available_models else 'Model bulunamadı (henüz tahmin devre dışı)' }}</span>
+      </div>
+    </div>
+
+    <div>
+      <div class="prediction-box">
+        <div class="drug-name" id="drugName">
+          {{ prediction.class if prediction.class else "Henüz resim yok" }}
+        </div>
+        <div class="confidence" id="confidence">
+          {% if prediction.confidence %} Güven: {{ "%.2f"|format(prediction.confidence * 100) }}%
+          {% else %} Güven: --% {% endif %}
+        </div>
+        <div class="timestamp" id="timestamp">
+          {% if prediction.timestamp %} Son güncelleme: {{ prediction.timestamp }}
+          {% else %} Son güncelleme: -- {% endif %}
+        </div>
+      </div>
+
+      <div class="ensemble-methods" id="ensembleMethods">
+        <div class="method-box" id="averageMethod">
+          <div class="method-title">Ortalama Ensemble</div>
+          <div class="method-result" id="averageResult">-</div>
+          <div class="method-confidence" id="averageConfidence">-</div>
+        </div>
+        <div class="method-box" id="votingMethod">
+          <div class="method-title">Çoğunluk Oyu</div>
+          <div class="method-result" id="votingResult">-</div>
+          <div class="method-confidence" id="votingConfidence">-</div>
+        </div>
+        <div class="method-box" id="bestMethod">
+          <div class="method-title">En İyi Model</div>
+          <div class="method-result" id="bestResult">-</div>
+          <div class="method-confidence" id="bestConfidence">-</div>
+        </div>
+      </div>
+
+      <div class="voting-details" id="votingDetails">
+        <div class="voting-title">Çoğunluk Oyu Detayları</div>
+        <div id="voteBreakdown">
+          <div class="vote-item">
+            <div class="vote-class">Henüz tahmin yapılmadı</div>
+            <div class="vote-count">- oy</div>
+          </div>
+        </div>
+      </div>
+
+      <div style="text-align: center">
+        <button class="refresh-btn" onclick="refreshAll()">Yenile</button>
+        <button class="refresh-btn" onclick="toggleAutoRefresh()" id="autoRefreshBtn">Otomatik Yenileme</button>
+      </div>
+    </div>
+  </div>
+{% endblock %}
+{% block scripts %}
+<script>
+  let autoRefreshInterval = null;
+  let isAutoRefreshOn = false;
+
+  function refreshPreview() {
+    document.getElementById("preview").src = `/latest.jpg?t=${Date.now()}`;
+  }
+
+  async function refreshPrediction() {
+    try {
+      const response = await fetch("/latest_prediction");
+      const data = await response.json();
+
+      document.getElementById("drugName").textContent = data.class || "Henüz resim yok";
+      document.getElementById("confidence").textContent =
+        data.confidence !== undefined && data.confidence !== null
+          ? `Güven: ${(data.confidence * 100).toFixed(2)}%`
+          : "Güven: --%";
+      document.getElementById("timestamp").textContent = data.timestamp
+        ? `Son güncelleme: ${data.timestamp}`
+        : "Son güncelleme: --";
+
+      if (data.ensemble_details) {
+        updateEnsembleDetails(data.ensemble_details);
+      }
+
+      const statusDiv = document.getElementById("status");
+      if (data.class && data.class !== "Henüz resim yok") {
+        statusDiv.className = "status success";
+        statusDiv.textContent = "Tahmin başarılı!";
+      } else {
+        statusDiv.className = "status waiting";
+        statusDiv.textContent = "ESP32'den resim bekleniyor...";
+      }
+    } catch (error) {
+      document.getElementById("status").className = "status error";
+      document.getElementById("status").textContent = "Bağlantı hatası!";
+    }
+  }
+
+  function refreshAll() {
+    refreshPreview();
+    refreshPrediction();
+  }
+
+  function updateEnsembleDetails(d) {
+    const avg = d.ensemble_average;
+    document.getElementById("averageResult").textContent = avg.class;
+    document.getElementById("averageConfidence").textContent = `${(avg.confidence * 100).toFixed(1)}%`;
+
+    const voting = d.ensemble_voting;
+    document.getElementById("votingResult").textContent = voting.class;
+    document.getElementById("votingConfidence").textContent = `${(voting.confidence * 100).toFixed(1)}%`;
+
+    const best = d.best_individual;
+    document.getElementById("bestResult").textContent = best.class;
+    document.getElementById("bestConfidence").textContent = `${(best.confidence * 100).toFixed(1)}% (${best.model})`;
+
+    document.querySelectorAll(".method-box").forEach((b) => b.classList.remove("active"));
+    if (best.confidence > 0.8) {
+      document.getElementById("bestMethod").classList.add("active");
+    } else {
+      document.getElementById("averageMethod").classList.add("active");
+    }
+
+    const breakdown = document.getElementById("voteBreakdown");
+    breakdown.innerHTML = "";
+    const votesEntries = Object.entries(voting.votes || {}).sort((a, b) => b[1] - a[1]);
+    votesEntries.forEach(([className, count], index) => {
+      const item = document.createElement("div");
+      item.className = "vote-item" + (index === 0 ? " winner" : "");
+      item.innerHTML = `<div class="vote-class">${index === 0 ? "🏆 " : ""}${className}</div><div class="vote-count">${count} oy</div>`;
+      breakdown.appendChild(item);
+    });
+  }
+
+  function toggleAutoRefresh() {
+    const btn = document.getElementById("autoRefreshBtn");
+    if (isAutoRefreshOn) {
+      clearInterval(autoRefreshInterval);
+      btn.textContent = "Otomatik Yenileme";
+      isAutoRefreshOn = false;
+    } else {
+      autoRefreshInterval = setInterval(refreshAll, 2000);
+      btn.textContent = "Durdur";
+      isAutoRefreshOn = true;
+    }
+  }
+
+  window.onload = function () {
+    refreshAll();
+  };
+</script>
+{% endblock %}

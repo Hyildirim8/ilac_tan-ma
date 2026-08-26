@@ -1,0 +1,136 @@
+{% extends "base.html" %}
+{% block title %}Veri Ekleme & Artırma — İlaç Tanıma Sistemi{% endblock %}
+{% block head %}
+<style>
+  .grid { display: grid; grid-template-columns: 320px 1fr; gap: 24px; align-items: start; }
+  #preview { border: 2px solid #ddd; border-radius: 8px; width: 100%; object-fit: contain; background: #fafafa; }
+  .save-box { margin-top: 12px; padding: 12px; background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 8px; }
+  .save-box label { font-size: 14px; color: #555; display: block; margin-bottom: 6px; }
+  .save-box input { width: 100%; padding: 8px; box-sizing: border-box; margin-bottom: 8px; border: 1px solid #ccc; border-radius: 5px; }
+  .save-box button { width: 100%; }
+  .section-title { font-size: 18px; font-weight: bold; color: #333; margin: 0 0 12px; }
+  table.dataset-table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
+  table.dataset-table th, table.dataset-table td {
+    text-align: left; padding: 8px 12px; border-bottom: 1px solid #eee; font-size: 14px;
+  }
+  table.dataset-table th { color: #666; font-weight: 600; }
+  .augment-box { background: #f0fff0; border: 1px solid #c3e6cb; border-radius: 8px; padding: 16px; }
+  .augment-log { background: #212529; color: #d4edda; font-family: monospace; font-size: 13px; padding: 12px; border-radius: 6px; margin-top: 12px; max-height: 200px; overflow-y: auto; white-space: pre-wrap; display: none; }
+  .empty-note { color: #888; font-size: 14px; }
+</style>
+{% endblock %}
+{% block content %}
+  <h1>📥 Veri Ekleme &amp; Veri Artırma</h1>
+
+  <div class="grid">
+    <div>
+      <img id="preview" src="/latest.jpg" alt="latest image" />
+      <div class="save-box">
+        <label for="drug_name">İlaç Adı / Klasör:</label>
+        <input type="text" id="drug_name" placeholder="örnek: parol_500mg" />
+        <button class="refresh-btn blue" id="saveBtn">Veri Setine Kaydet</button>
+      </div>
+      <div style="text-align:center; margin-top: 8px;">
+        <button class="refresh-btn" onclick="refreshPreview()">Önizlemeyi Yenile</button>
+      </div>
+    </div>
+
+    <div>
+      <div class="section-title">Veri Seti</div>
+      <table class="dataset-table" id="datasetTable">
+        <thead><tr><th>İlaç / Klasör</th><th>Orijinal Görüntü</th></tr></thead>
+        <tbody id="datasetTableBody">
+          <tr><td colspan="2" class="empty-note">Yükleniyor...</td></tr>
+        </tbody>
+      </table>
+
+      <div class="augment-box">
+        <div class="section-title" style="margin-bottom:6px;">Veri Artırma</div>
+        <p style="font-size:14px; color:#333; margin-top:0;">
+          Veri setindeki her görüntüden döndürme/kaydırma/yakınlaştırma/parlaklık gibi dönüşümlerle
+          çoğaltılmış kopyalar üretir (<code>web/augmented_dataset/</code>).
+        </p>
+        <button class="refresh-btn" id="augmentBtn" onclick="runAugmentation()">Veri Artırmayı Başlat</button>
+        <span id="augmentStatus" style="margin-left:10px; font-size:14px; color:#666;"></span>
+        <div class="augment-log" id="augmentLog"></div>
+      </div>
+    </div>
+  </div>
+{% endblock %}
+{% block scripts %}
+<script>
+  function refreshPreview() {
+    document.getElementById("preview").src = `/latest.jpg?t=${Date.now()}`;
+  }
+
+  async function loadDatasetSummary() {
+    try {
+      const res = await fetch("/api/dataset_summary");
+      const data = await res.json();
+      const body = document.getElementById("datasetTableBody");
+      body.innerHTML = "";
+      const entries = Object.entries(data.classes || {});
+      if (entries.length === 0) {
+        body.innerHTML = '<tr><td colspan="2" class="empty-note">Henüz veri seti yok — soldan görüntü kaydedin.</td></tr>';
+        return;
+      }
+      entries.sort((a, b) => a[0].localeCompare(b[0]));
+      entries.forEach(([name, count]) => {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `<td>${name}</td><td>${count}</td>`;
+        body.appendChild(tr);
+      });
+    } catch (e) {
+      console.error(e);
+    }
+  }
+
+  async function runAugmentation() {
+    const btn = document.getElementById("augmentBtn");
+    const status = document.getElementById("augmentStatus");
+    const log = document.getElementById("augmentLog");
+    btn.disabled = true;
+    status.textContent = "Çalışıyor...";
+    log.style.display = "none";
+
+    try {
+      const res = await fetch("/augment", { method: "POST" });
+      const data = await res.json();
+      if (res.ok) {
+        status.textContent = `Tamamlandı — ${data.total_generated} görüntü üretildi.`;
+        log.style.display = "block";
+        log.textContent = Object.entries(data.per_class)
+          .map(([k, v]) => `${k}: ${v.original} orijinal -> ${v.generated} üretildi`)
+          .join("\n");
+      } else {
+        status.textContent = "Hata: " + (data.detail || JSON.stringify(data));
+      }
+    } catch (e) {
+      status.textContent = "Bağlantı hatası: " + e;
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  document.getElementById("saveBtn").addEventListener("click", async () => {
+    const drug = document.getElementById("drug_name").value.trim();
+    if (!drug) { alert("İlaç adı gir."); return; }
+    const form = new FormData();
+    form.append("drug_name", drug);
+    const res = await fetch("/save", { method: "POST", body: form });
+    const j = await res.json();
+    if (res.ok) {
+      alert("Kaydedildi: " + j.saved_to);
+      loadDatasetSummary();
+    } else {
+      alert("Hata: " + (j.detail || JSON.stringify(j)));
+    }
+  });
+
+  window.onload = function () {
+    refreshPreview();
+    loadDatasetSummary();
+    setInterval(refreshPreview, 3000);
+  };
+</script>
+{% endblock %}

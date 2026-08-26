@@ -1,0 +1,13 @@
+services:
+  web:
+    build: ./web
+    container_name: ilac_tanima_web
+    ports:
+      - "5050:5000"
+    volumes:
+      - ./web/dataset:/app/dataset
+      - ./web/augmented_dataset:/app/augmented_dataset
+      - ./web/model:/app/model
+      - ./web/uploads:/app/uploads
+      - ./web/static:/app/static
+    restart: unless-stopped

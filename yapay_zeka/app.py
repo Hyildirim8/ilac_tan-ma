@@ -491,6 +491,20 @@ def train_all_models():
     
     # Sonuçları text dosyasına yaz
     write_results_to_file(results, "model_results_fixed.txt")
+
+    # Sonuçları JSON olarak da yaz (web/ sitesindeki "Toplam Sonuçlar" grafiği bunu okur)
+    results_json = {
+        model_name: {
+            "val_accuracy": result["val_accuracy"],
+            "val_loss": result["val_loss"],
+            "params": result["params"],
+        }
+        for model_name, result in results.items()
+        if "error" not in result
+    }
+    with open("model_results.json", "w", encoding="utf-8") as f:
+        json.dump(results_json, f, ensure_ascii=False, indent=2)
+    print("📄 Grafik verisi 'model_results.json' dosyasına kaydedildi")
     
     # Konsol çıktısı
     print(f"\n{'='*60}")

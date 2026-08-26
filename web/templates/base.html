@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="tr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>{% block title %}İlaç Tanıma Sistemi{% endblock %}</title>
+    <style>
+      * { box-sizing: border-box; }
+      body {
+        font-family: Arial, sans-serif;
+        max-width: 1100px;
+        margin: 0 auto;
+        padding: 0 20px 30px;
+        background-color: #f5f5f5;
+      }
+      .navbar {
+        display: flex;
+        gap: 4px;
+        margin: 20px 0;
+        background: white;
+        border-radius: 10px;
+        padding: 8px;
+        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.08);
+      }
+      .navbar a {
+        flex: 1;
+        text-align: center;
+        text-decoration: none;
+        color: #495057;
+        padding: 12px 10px;
+        border-radius: 8px;
+        font-weight: bold;
+        font-size: 15px;
+      }
+      .navbar a:hover { background: #f0f4ff; }
+      .navbar a.active { background: #2196f3; color: white; }
+      .container {
+        background: white;
+        padding: 30px;
+        border-radius: 10px;
+        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+      }
+      h1 { text-align: center; color: #333; margin-top: 0; margin-bottom: 24px; }
+      .status { padding: 10px; border-radius: 5px; margin: 0 0 20px; text-align: center; font-weight: bold; }
+      .waiting { background-color: #fff3cd; border: 1px solid #ffeaa7; color: #856404; }
+      .success { background-color: #d4edda; border: 1px solid #c3e6cb; color: #155724; }
+      .error { background-color: #f8d7da; border: 1px solid #f5c6cb; color: #721c24; }
+      .refresh-btn {
+        background-color: #4caf50;
+        color: white;
+        padding: 10px 20px;
+        border: none;
+        border-radius: 5px;
+        cursor: pointer;
+        font-size: 15px;
+        margin: 4px;
+      }
+      .refresh-btn:hover { background-color: #45a049; }
+      .refresh-btn.blue { background-color: #2196f3; }
+      .refresh-btn.blue:hover { background-color: #1976d2; }
+      .refresh-btn:disabled { background-color: #aaa; cursor: not-allowed; }
+    </style>
+    {% block head %}{% endblock %}
+  </head>
+  <body>
+    <nav class="navbar">
+      <a href="/" class="{{ 'active' if active_tab == 'veri' else '' }}">📥 Veri Ekleme &amp; Artırma</a>
+      <a href="/tahmin" class="{{ 'active' if active_tab == 'tahmin' else '' }}">🔬 Veri Tahmini</a>
+      <a href="/sonuclar" class="{{ 'active' if active_tab == 'sonuclar' else '' }}">📊 Toplam Sonuçlar</a>
+    </nav>
+
+    <div class="container">
+      {% block content %}{% endblock %}
+    </div>
+
+    {% block scripts %}{% endblock %}
+  </body>
+</html>

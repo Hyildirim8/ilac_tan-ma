@@ -25,7 +25,7 @@
 // WiFi ve sunucu ayarları (WiFi bilgileri secrets.h'ten gelir, git'e girmez)
 const char* ssid = WIFI_SSID;
 const char* password = WIFI_PASSWORD;
-const char* serverName = "http://10.42.101.18:5050/upload_esp"; // FastAPI endpoint (web/ Docker servisi, host port 5050)
+const char* serverName = "http://10.42.101.48:5050/upload_esp"; // FastAPI endpoint (web/ Docker servisi, host port 5050)
 
 // Flash kontrol
 #define FLASH_GPIO 4   // ESP32-CAM üzerindeki LED

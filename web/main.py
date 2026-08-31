@@ -4,6 +4,7 @@ import glob
 import json
 import shutil
 import datetime
+import threading
 from collections import Counter
 
 from fastapi import FastAPI, Request, Form
@@ -14,6 +15,8 @@ from fastapi.concurrency import run_in_threadpool
 from PIL import Image
 import numpy as np
 import uvicorn
+
+import model_training
 
 APP_ROOT = os.path.dirname(__file__)
 STATIC_DIR = os.path.join(APP_ROOT, "static")
@@ -148,6 +151,117 @@ def ensemble_predict(image_path):
 
 print("Modeller yükleniyor...")
 load_all_models()
+
+# ---- Model eğitimi (web sayfasından tetiklenir) ----
+
+training_lock = threading.Lock()
+training_status = {
+    "running": False,
+    "current_model": None,
+    "current_epoch": 0,
+    "total_epochs": 0,
+    "log": [],
+    "done": False,
+    "error": None,
+    "best_model": None,
+}
+
+
+def _pick_training_dataset_dir():
+    """Eğitim için augmented_dataset'i tercih eder (yeterli veri varsa),
+    yoksa ham dataset'e düşer."""
+
+    def class_counts(base_dir):
+        counts = {}
+        if os.path.isdir(base_dir):
+            for name in os.listdir(base_dir):
+                folder = os.path.join(base_dir, name)
+                if os.path.isdir(folder):
+                    counts[name] = len([f for f in os.listdir(folder) if f.lower().endswith((".jpg", ".jpeg", ".png"))])
+        return counts
+
+    augmented_counts = class_counts(AUGMENTED_DIR)
+    if sum(1 for c in augmented_counts.values() if c > 0) >= 2:
+        return AUGMENTED_DIR, augmented_counts
+
+    dataset_counts = class_counts(DATASET_DIR)
+    return DATASET_DIR, dataset_counts
+
+
+def _training_progress(update):
+    event = update.get("event")
+    if event == "start":
+        training_status["log"].append(
+            f"{update['num_classes']} sınıf bulundu: {', '.join(update['classes'])}"
+        )
+    elif event == "model_start":
+        training_status["current_model"] = update["model"]
+        training_status["current_epoch"] = 0
+        training_status["total_epochs"] = update["total_epochs"]
+        training_status["log"].append(f"[{update['model']}] eğitim başladı")
+    elif event == "epoch_end":
+        training_status["current_model"] = update["model"]
+        training_status["current_epoch"] = update["epoch"]
+        training_status["total_epochs"] = update["total_epochs"]
+        logs = update.get("logs", {})
+        acc = logs.get("accuracy")
+        val_acc = logs.get("val_accuracy")
+        training_status["log"].append(
+            f"[{update['model']}] epoch {update['epoch']}/{update['total_epochs']}"
+            + (f" - acc: {acc:.4f}" if acc is not None else "")
+            + (f" - val_acc: {val_acc:.4f}" if val_acc is not None else "")
+        )
+    elif event == "model_end":
+        training_status["log"].append(
+            f"[{update['model']}] tamamlandı - val_accuracy: {update['val_accuracy']:.4f}"
+        )
+    elif event == "model_error":
+        training_status["log"].append(f"[{update['model']}] HATA: {update['error']}")
+    elif event == "done":
+        training_status["log"].append(f"Eğitim tamamlandı. En iyi model: {update['best_model']}")
+        training_status["best_model"] = update["best_model"]
+
+    training_status["log"] = training_status["log"][-200:]
+
+
+def _run_training_job():
+    training_status.update({
+        "running": True, "done": False, "error": None, "best_model": None,
+        "current_model": None, "current_epoch": 0, "total_epochs": 0, "log": [],
+    })
+    try:
+        dataset_dir, _ = _pick_training_dataset_dir()
+        model_training.train_all_models(dataset_dir, MODEL_DIR, on_progress=_training_progress)
+        load_all_models()
+    except Exception as e:
+        training_status["error"] = str(e)
+        training_status["log"].append(f"HATA: {e}")
+    finally:
+        training_status["running"] = False
+        training_status["done"] = True
+
+
+@app.post("/train")
+async def start_training():
+    if training_status["running"]:
+        return JSONResponse({"status": "error", "detail": "Eğitim zaten çalışıyor"}, status_code=409)
+
+    dataset_dir, counts = _pick_training_dataset_dir()
+    usable_classes = {k: v for k, v in counts.items() if v > 0}
+    if len(usable_classes) < 2:
+        return JSONResponse(
+            {"status": "error", "detail": "Eğitim için en az 2 sınıfta görüntü gerekli. Önce veri ekleyip veri artırma yapın."},
+            status_code=400,
+        )
+
+    threading.Thread(target=_run_training_job, daemon=True).start()
+    return JSONResponse({"status": "ok", "dataset_dir": os.path.basename(dataset_dir), "classes": usable_classes})
+
+
+@app.get("/train_status")
+async def get_training_status():
+    return JSONResponse(training_status)
+
 
 # ---- Ortak endpoint'ler ----
 

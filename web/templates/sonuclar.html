@@ -14,10 +14,27 @@
     padding: 16px; margin-bottom: 20px; text-align: center;
   }
   .best-model-box .name { font-size: 20px; font-weight: bold; color: #f57f17; }
+  .train-box { background: #f0f4ff; border: 1px solid #c3d4f5; border-radius: 8px; padding: 16px; margin-bottom: 24px; }
+  .train-log { background: #212529; color: #d4edda; font-family: monospace; font-size: 12px; padding: 12px; border-radius: 6px; margin-top: 12px; max-height: 240px; overflow-y: auto; white-space: pre-wrap; display: none; }
+  .progress-bar-wrap { background: #dde3f0; border-radius: 6px; height: 18px; margin-top: 10px; overflow: hidden; display: none; }
+  .progress-bar-fill { background: #2196f3; height: 100%; width: 0%; transition: width 0.3s; }
 </style>
 {% endblock %}
 {% block content %}
   <h1>📊 Toplam Sonuçlar</h1>
+
+  <div class="train-box">
+    <div class="section-title" style="margin-top:0;">Modelleri Eğit</div>
+    <p style="font-size:14px; color:#333; margin-top:0;">
+      Veri setindeki (tercihen veri artırma yapılmış) görüntülerle 8 modeli sırayla eğitir ve
+      en iyi modeli otomatik olarak tahmin için etkinleştirir.
+    </p>
+    <button class="refresh-btn blue" id="trainBtn" onclick="startTraining()">Eğitimi Başlat</button>
+    <span id="trainStatus" style="margin-left:10px; font-size:14px; color:#666;"></span>
+    <div class="progress-bar-wrap" id="trainProgressWrap"><div class="progress-bar-fill" id="trainProgressFill"></div></div>
+    <div class="train-log" id="trainLog"></div>
+  </div>
+
   <div id="resultsRoot">
     <div class="empty-note">Yükleniyor...</div>
   </div>
@@ -92,7 +109,7 @@
       const data = await res.json();
 
       if (!data.available || Object.keys(data.results).length === 0) {
-        root.innerHTML = '<div class="empty-note">Henüz eğitim sonucu yok. <code>yapay_zeka/app.py</code> ile modelleri eğitip <code>model_results.json</code> dosyasını <code>web/model/</code> altına kopyalayın.</div>';
+        root.innerHTML = '<div class="empty-note">Henüz eğitim sonucu yok. Yukarıdaki "Eğitimi Başlat" butonuyla modelleri eğitebilirsiniz.</div>';
         return;
       }
 
@@ -139,6 +156,75 @@
     }
   }
 
-  window.onload = loadResults;
+  let trainPollTimer = null;
+
+  async function startTraining() {
+    const btn = document.getElementById("trainBtn");
+    const status = document.getElementById("trainStatus");
+    try {
+      const res = await fetch("/train", { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) {
+        status.textContent = "Hata: " + (data.detail || JSON.stringify(data));
+        return;
+      }
+      btn.disabled = true;
+      status.textContent = "Eğitim başladı...";
+      document.getElementById("trainProgressWrap").style.display = "block";
+      document.getElementById("trainLog").style.display = "block";
+      pollTrainingStatus();
+    } catch (e) {
+      status.textContent = "Bağlantı hatası: " + e;
+    }
+  }
+
+  async function pollTrainingStatus() {
+    clearTimeout(trainPollTimer);
+    const btn = document.getElementById("trainBtn");
+    const status = document.getElementById("trainStatus");
+    const log = document.getElementById("trainLog");
+    const fill = document.getElementById("trainProgressFill");
+
+    try {
+      const res = await fetch("/train_status");
+      const data = await res.json();
+
+      log.textContent = (data.log || []).join("\n");
+      log.scrollTop = log.scrollHeight;
+
+      if (data.running) {
+        const pct = data.total_epochs ? Math.round((data.current_epoch / data.total_epochs) * 100) : 0;
+        fill.style.width = pct + "%";
+        status.textContent = data.current_model
+          ? `Eğitiliyor: ${data.current_model} (epoch ${data.current_epoch}/${data.total_epochs})`
+          : "Eğitim hazırlanıyor...";
+        trainPollTimer = setTimeout(pollTrainingStatus, 2000);
+      } else {
+        btn.disabled = false;
+        document.getElementById("trainProgressWrap").style.display = "none";
+        if (data.error) {
+          status.textContent = "Hata: " + data.error;
+        } else if (data.done) {
+          status.textContent = data.best_model ? `Tamamlandı — en iyi model: ${data.best_model}` : "Tamamlandı";
+          loadResults();
+        }
+      }
+    } catch (e) {
+      status.textContent = "Durum sorgulanırken hata: " + e;
+      trainPollTimer = setTimeout(pollTrainingStatus, 3000);
+    }
+  }
+
+  window.onload = function () {
+    loadResults();
+    fetch("/train_status").then(r => r.json()).then(data => {
+      if (data.running) {
+        document.getElementById("trainBtn").disabled = true;
+        document.getElementById("trainProgressWrap").style.display = "block";
+        document.getElementById("trainLog").style.display = "block";
+        pollTrainingStatus();
+      }
+    }).catch(() => {});
+  };
 </script>
 {% endblock %}

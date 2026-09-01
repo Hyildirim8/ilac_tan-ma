@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+{% block title %}Drive & Colab — İlaç Tanıma Sistemi{% endblock %}
+{% block head %}
+<style>
+  .box { border-radius: 8px; padding: 16px; margin-bottom: 20px; }
+  .drive-box { background: #f0f4ff; border: 1px solid #c3d4f5; }
+  .colab-box { background: #fff8e1; border: 1px solid #ffe082; }
+  .import-box { background: #f0fff0; border: 1px solid #c3e6cb; }
+  .section-title { font-size: 18px; font-weight: bold; color: #333; margin: 0 0 12px; }
+  .setup-note { background: #fffbe6; border: 1px solid #ffe58f; border-radius: 6px; padding: 10px 14px; font-size: 13px; color: #555; margin-top: 10px; }
+  code { background: #eef; padding: 1px 5px; border-radius: 4px; font-size: 13px; }
+  .file-input { margin: 10px 0; display: block; }
+  .result-log { background: #212529; color: #d4edda; font-family: monospace; font-size: 12px; padding: 12px; border-radius: 6px; margin-top: 12px; max-height: 200px; overflow-y: auto; white-space: pre-wrap; display: none; }
+  ol { font-size: 14px; color: #333; padding-left: 20px; }
+</style>
+{% endblock %}
+{% block content %}
+  <h1>☁️ Drive &amp; Colab</h1>
+
+  <div class="box drive-box">
+    <div class="section-title">Veri Setini Drive'a Yükleme</div>
+    <p style="font-size:14px; color:#333; margin-top:0;">
+      Zip'i indirip <a href="https://drive.google.com" target="_blank" rel="noopener">drive.google.com</a>'a
+      elle sürükleyip bırakın.
+    </p>
+    <a class="refresh-btn blue" href="/dataset/export_zip" style="text-decoration:none; display:inline-block;">📦 Veri Setini Zip Olarak İndir</a>
+  </div>
+
+  <div class="box colab-box">
+    <div class="section-title">Colab'da Eğitim</div>
+    <ol>
+      <li>Yukarıdan indirdiğiniz zip'i Drive'ınızda <code>IlacTanimaVeriSeti</code> adlı bir klasöre koyun
+        (klasör yoksa oluşturun).</li>
+      <li>Aşağıdaki notebook'u indirin.</li>
+      <li><a href="https://colab.research.google.com" target="_blank" rel="noopener">colab.research.google.com</a> üzerinden
+        <em>Dosya &gt; Not defteri yükle</em> ile açın.</li>
+      <li>Çalışma zamanı türünü GPU yapıp hücreleri sırayla çalıştırın.</li>
+      <li>Eğitim bitince inen <code>model_output.zip</code>'i açıp içindeki dosyaları
+        aşağıdaki "Eğitilen Modeli İçeri Al" formuna sürükleyin.</li>
+    </ol>
+    {% if colab_notebook_available %}
+    <a class="refresh-btn blue" href="/colab/notebook" download style="text-decoration:none; display:inline-block;">📓 Colab Notebook'u İndir</a>
+    {% else %}
+    <div class="setup-note">Notebook dosyası bulunamadı.</div>
+    {% endif %}
+  </div>
+
+  <div class="box import-box">
+    <div class="section-title">Eğitilen Modeli İçeri Al</div>
+    <p style="font-size:14px; color:#333; margin-top:0;">
+      Colab'dan indirdiğiniz <code>ilac_model_*.h5</code>, <code>class_names_*.json</code>
+      ve <code>model_results.json</code> dosyalarını seçin — <code>web/model/</code> içine
+      kaydedilir ve modeller anında tahmin için yeniden yüklenir.
+    </p>
+    <input type="file" id="modelFiles" class="file-input" multiple accept=".h5,.json" />
+    <button class="refresh-btn" onclick="importModels()">İçeri Al</button>
+    <div class="result-log" id="importLog"></div>
+  </div>
+{% endblock %}
+{% block scripts %}
+<script>
+  async function importModels() {
+    const input = document.getElementById("modelFiles");
+    const log = document.getElementById("importLog");
+    if (!input.files.length) { alert("Önce dosya seçin."); return; }
+
+    const form = new FormData();
+    for (const f of input.files) form.append("files", f);
+
+    log.style.display = "block";
+    log.textContent = "Yükleniyor...";
+    try {
+      const res = await fetch("/import_model", { method: "POST", body: form });
+      const data = await res.json();
+      if (res.ok) {
+        log.textContent = `İçeri alındı: ${data.imported.join(", ") || "(yok)"}\n` +
+          (data.rejected.length ? `Reddedildi (isim uymadı): ${data.rejected.join(", ")}\n` : "") +
+          `Yüklü model sayısı: ${data.model_count}`;
+      } else {
+        log.textContent = "Hata: " + (data.detail || JSON.stringify(data));
+      }
+    } catch (e) {
+      log.textContent = "Bağlantı hatası: " + e;
+    }
+  }
+</script>
+{% endblock %}

@@ -1,13 +1,16 @@
 import os
 import io
+import re
 import glob
 import json
 import shutil
+import zipfile
 import datetime
 import threading
 from collections import Counter
+from typing import List
 
-from fastapi import FastAPI, Request, Form
+from fastapi import FastAPI, Request, Form, UploadFile, File
 from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -24,6 +27,8 @@ UPLOAD_DIR = os.path.join(APP_ROOT, "uploads")
 DATASET_DIR = os.path.join(APP_ROOT, "dataset")
 AUGMENTED_DIR = os.path.join(APP_ROOT, "augmented_dataset")
 MODEL_DIR = os.path.join(APP_ROOT, "model")
+TMP_DIR = os.path.join(APP_ROOT, "tmp")
+COLAB_NOTEBOOK_PATH = os.path.join(APP_ROOT, "colab", "egitim_colab.ipynb")
 LATEST_PATH = os.path.join(STATIC_DIR, "latest.jpg")
 
 os.makedirs(STATIC_DIR, exist_ok=True)
@@ -31,10 +36,12 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(DATASET_DIR, exist_ok=True)
 os.makedirs(AUGMENTED_DIR, exist_ok=True)
 os.makedirs(MODEL_DIR, exist_ok=True)
+os.makedirs(TMP_DIR, exist_ok=True)
 
 app = FastAPI()
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
+app.mount("/dataset_files", StaticFiles(directory=DATASET_DIR), name="dataset_files")
 templates = Jinja2Templates(directory=os.path.join(APP_ROOT, "templates"))
 
 # ---- Model yükleme (tahmin_sitesi'nden birleştirildi) ----
@@ -263,6 +270,120 @@ async def get_training_status():
     return JSONResponse(training_status)
 
 
+# ---- Drive (manuel) & Colab ----
+
+
+def _build_dataset_zip(output_zip_path):
+    with zipfile.ZipFile(output_zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+        for base_dir, arc_prefix in ((DATASET_DIR, "dataset"), (AUGMENTED_DIR, "augmented_dataset")):
+            if not os.path.isdir(base_dir):
+                continue
+            for file_path in glob.glob(os.path.join(base_dir, "**", "*"), recursive=True):
+                if os.path.isfile(file_path):
+                    rel_path = os.path.relpath(file_path, base_dir)
+                    zf.write(file_path, arcname=os.path.join(arc_prefix, rel_path))
+
+
+@app.get("/dataset/export_zip")
+async def export_dataset_zip():
+    """Veri setini zip olarak indirir; kullanıcı bunu kendi Drive'ına elle
+    sürükleyip bırakır (Google API/OAuth kurulumu gerekmez)."""
+    from starlette.background import BackgroundTask
+
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    zip_name = f"dataset_{timestamp}.zip"
+    zip_path = os.path.join(TMP_DIR, zip_name)
+
+    try:
+        await run_in_threadpool(_build_dataset_zip, zip_path)
+    except Exception as e:
+        return JSONResponse({"status": "error", "detail": str(e)}, status_code=500)
+
+    return FileResponse(
+        zip_path,
+        media_type="application/zip",
+        filename=zip_name,
+        background=BackgroundTask(lambda: os.path.exists(zip_path) and os.remove(zip_path)),
+    )
+
+
+@app.get("/drive_colab", response_class=HTMLResponse)
+async def drive_colab_sayfasi(request: Request):
+    return templates.TemplateResponse(
+        "drive_colab.html",
+        {
+            "request": request,
+            "active_tab": "drive_colab",
+            "colab_notebook_available": os.path.exists(COLAB_NOTEBOOK_PATH),
+        },
+    )
+
+
+@app.get("/colab/notebook")
+async def download_colab_notebook():
+    if not os.path.exists(COLAB_NOTEBOOK_PATH):
+        return JSONResponse({"status": "error", "detail": "Notebook bulunamadı"}, status_code=404)
+    return FileResponse(
+        COLAB_NOTEBOOK_PATH,
+        media_type="application/x-ipynb+json",
+        filename="egitim_colab.ipynb",
+    )
+
+
+# Colab'da eğitilen model dosyalarını (.h5 / class_names*.json / model_results.json)
+# web/model/ içine alır ve modelleri anında tahmin için yeniden yükler.
+_IMPORT_FILENAME_RE = re.compile(
+    r"^(ilac_model(_[\w\-]+)?\.h5|class_names(_[\w\-]+)?\.json|model_results\.json)$"
+)
+
+
+@app.post("/import_model")
+async def import_model(files: List[UploadFile] = File(...)):
+    imported = []
+    rejected = []
+    new_results = {}
+
+    for upload in files:
+        name = os.path.basename(upload.filename or "")
+        if not _IMPORT_FILENAME_RE.match(name):
+            rejected.append(upload.filename)
+            continue
+
+        contents = await upload.read()
+        dest = os.path.join(MODEL_DIR, name)
+        with open(dest, "wb") as f:
+            f.write(contents)
+        imported.append(name)
+
+        if name == "model_results.json":
+            try:
+                new_results = json.loads(contents)
+            except Exception:
+                new_results = {}
+
+    if new_results:
+        results_path = os.path.join(MODEL_DIR, "model_results.json")
+        existing = {}
+        if os.path.exists(results_path):
+            try:
+                with open(results_path, "r", encoding="utf-8") as f:
+                    existing = json.load(f)
+            except Exception:
+                existing = {}
+        existing.update(new_results)
+        with open(results_path, "w", encoding="utf-8") as f:
+            json.dump(existing, f, ensure_ascii=False, indent=2)
+
+    load_all_models()
+
+    return JSONResponse({
+        "status": "ok",
+        "imported": imported,
+        "rejected": rejected,
+        "model_count": len(models_ensemble),
+    })
+
+
 # ---- Ortak endpoint'ler ----
 
 
@@ -365,16 +486,77 @@ async def get_latest_prediction():
     return JSONResponse(content=last_prediction)
 
 
+def _count_images_per_class(base_dir):
+    counts = {}
+    if os.path.isdir(base_dir):
+        for name in sorted(os.listdir(base_dir)):
+            folder = os.path.join(base_dir, name)
+            if os.path.isdir(folder):
+                counts[name] = len([f for f in os.listdir(folder) if f.lower().endswith((".jpg", ".jpeg", ".png"))])
+    return counts
+
+
 @app.get("/api/dataset_summary")
 async def dataset_summary():
-    classes = {}
-    if os.path.isdir(DATASET_DIR):
-        for name in sorted(os.listdir(DATASET_DIR)):
-            folder = os.path.join(DATASET_DIR, name)
-            if os.path.isdir(folder):
-                count = len([f for f in os.listdir(folder) if f.lower().endswith((".jpg", ".jpeg", ".png"))])
-                classes[name] = count
-    return {"classes": classes}
+    return {
+        "classes": _count_images_per_class(DATASET_DIR),
+        "augmented_classes": _count_images_per_class(AUGMENTED_DIR),
+    }
+
+
+@app.get("/api/dataset_images")
+async def dataset_images(class_name: str):
+    safe_name = os.path.basename(class_name)
+    folder = os.path.join(DATASET_DIR, safe_name)
+    if not os.path.isdir(folder):
+        return JSONResponse({"status": "error", "detail": "Sınıf bulunamadı"}, status_code=404)
+    files = sorted(f for f in os.listdir(folder) if f.lower().endswith((".jpg", ".jpeg", ".png")))
+    return {"class_name": safe_name, "files": files}
+
+
+# Seçilen görüntüleri veri setinden siler (üzerlerine "Görüntüle" ile bakılıp
+# işaretlenirler). Sadece dataset/ etkilenir; artırılmış veri, kullanıcı
+# "Veri Artırmayı Başlat"a tekrar basınca zaten sıfırdan yenilenir.
+@app.post("/api/dataset_delete_images")
+async def dataset_delete_images(request: Request):
+    body = await request.json()
+    class_name = os.path.basename(body.get("class_name", ""))
+    filenames = body.get("filenames", [])
+    folder = os.path.join(DATASET_DIR, class_name)
+    if not os.path.isdir(folder):
+        return JSONResponse({"status": "error", "detail": "Sınıf bulunamadı"}, status_code=404)
+
+    deleted = []
+    for name in filenames:
+        safe_name = os.path.basename(str(name))
+        path = os.path.join(folder, safe_name)
+        if os.path.isfile(path) and safe_name.lower().endswith((".jpg", ".jpeg", ".png")):
+            os.remove(path)
+            deleted.append(safe_name)
+
+    return {"status": "ok", "deleted": deleted}
+
+
+# Bir ilacı (klasörü) hem ham veri setinden hem artırılmış veri setinden
+# tamamen siler.
+@app.post("/api/dataset_delete_class")
+async def dataset_delete_class(request: Request):
+    body = await request.json()
+    class_name = os.path.basename(body.get("class_name", ""))
+    if not class_name:
+        return JSONResponse({"status": "error", "detail": "Sınıf adı gerekli"}, status_code=400)
+
+    removed_from = []
+    for base_dir in (DATASET_DIR, AUGMENTED_DIR):
+        folder = os.path.join(base_dir, class_name)
+        if os.path.isdir(folder):
+            shutil.rmtree(folder)
+            removed_from.append(os.path.basename(base_dir))
+
+    if not removed_from:
+        return JSONResponse({"status": "error", "detail": "Sınıf bulunamadı"}, status_code=404)
+
+    return {"status": "ok", "class_name": class_name, "removed_from": removed_from}
 
 
 @app.get("/api/model_results")
@@ -416,6 +598,12 @@ def _run_augmentation():
             continue
         save_path = os.path.join(AUGMENTED_DIR, label)
         os.makedirs(save_path, exist_ok=True)
+
+        # Her çalıştırmada bu sınıfın eski üretilmiş görüntülerini temizle;
+        # aksi halde her basışta üstüne rastgele adlarla kopya birikiyordu.
+        for old_file in os.listdir(save_path):
+            if old_file.lower().endswith((".jpg", ".jpeg", ".png")):
+                os.remove(os.path.join(save_path, old_file))
 
         image_files = [f for f in os.listdir(label_path) if f.lower().endswith((".jpg", ".jpeg", ".png"))]
         generated = 0

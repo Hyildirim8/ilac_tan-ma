@@ -17,6 +17,15 @@
   .augment-box { background: #f0fff0; border: 1px solid #c3e6cb; border-radius: 8px; padding: 16px; }
   .augment-log { background: #212529; color: #d4edda; font-family: monospace; font-size: 13px; padding: 12px; border-radius: 6px; margin-top: 12px; max-height: 200px; overflow-y: auto; white-space: pre-wrap; display: none; }
   .empty-note { color: #888; font-size: 14px; }
+  .row-btn { padding: 5px 10px; font-size: 12px; border: none; border-radius: 5px; cursor: pointer; margin-right: 4px; }
+  .row-btn.view { background: #e3f2fd; color: #1565c0; }
+  .row-btn.danger { background: #fdecea; color: #c62828; }
+  .images-row td { background: #fafafa; padding: 12px !important; }
+  .image-grid { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 10px; }
+  .image-grid label { display: block; cursor: pointer; text-align: center; font-size: 11px; color: #555; }
+  .image-grid img { width: 90px; height: 90px; object-fit: cover; border-radius: 6px; border: 2px solid transparent; display: block; margin-bottom: 3px; }
+  .image-grid input:checked + img { border-color: #c62828; }
+  .images-actions { display: flex; gap: 8px; align-items: center; }
 </style>
 {% endblock %}
 {% block content %}
@@ -38,9 +47,9 @@
     <div>
       <div class="section-title">Veri Seti</div>
       <table class="dataset-table" id="datasetTable">
-        <thead><tr><th>İlaç / Klasör</th><th>Orijinal Görüntü</th></tr></thead>
+        <thead><tr><th>İlaç / Klasör</th><th>Orijinal Görüntü</th><th>Artırılmış Görüntü</th><th>İşlem</th></tr></thead>
         <tbody id="datasetTableBody">
-          <tr><td colspan="2" class="empty-note">Yükleniyor...</td></tr>
+          <tr><td colspan="4" class="empty-note">Yükleniyor...</td></tr>
         </tbody>
       </table>
 
@@ -48,7 +57,9 @@
         <div class="section-title" style="margin-bottom:6px;">Veri Artırma</div>
         <p style="font-size:14px; color:#333; margin-top:0;">
           Veri setindeki her görüntüden döndürme/kaydırma/yakınlaştırma/parlaklık gibi dönüşümlerle
-          çoğaltılmış kopyalar üretir (<code>web/augmented_dataset/</code>).
+          çoğaltılmış kopyalar üretir (<code>web/augmented_dataset/</code>). Her basışta ilgili
+          sınıfın artırılmış görüntüleri <strong>sıfırdan yeniden oluşturulur</strong> — tekrar tekrar
+          basmak üst üste eklemez, aynı sonucu tekrar üretir. Yeni veri eklediyseniz tekrar çalıştırmanız yeterli.
         </p>
         <button class="refresh-btn" id="augmentBtn" onclick="runAugmentation()">Veri Artırmayı Başlat</button>
         <span id="augmentStatus" style="margin-left:10px; font-size:14px; color:#666;"></span>
@@ -69,19 +80,128 @@
       const data = await res.json();
       const body = document.getElementById("datasetTableBody");
       body.innerHTML = "";
+      const augmented = data.augmented_classes || {};
       const entries = Object.entries(data.classes || {});
       if (entries.length === 0) {
-        body.innerHTML = '<tr><td colspan="2" class="empty-note">Henüz veri seti yok — soldan görüntü kaydedin.</td></tr>';
+        body.innerHTML = '<tr><td colspan="4" class="empty-note">Henüz veri seti yok — soldan görüntü kaydedin.</td></tr>';
         return;
       }
       entries.sort((a, b) => a[0].localeCompare(b[0]));
       entries.forEach(([name, count]) => {
+        const safeId = "cls_" + btoa(unescape(encodeURIComponent(name))).replace(/[^a-zA-Z0-9]/g, "");
+
         const tr = document.createElement("tr");
-        tr.innerHTML = `<td>${name}</td><td>${count}</td>`;
+        tr.innerHTML = `
+          <td>${name}</td><td>${count}</td><td>${augmented[name] || 0}</td>
+          <td>
+            <button class="row-btn view" onclick="toggleClassImages('${escapeJs(name)}', '${safeId}')">Görüntüle</button>
+            <button class="row-btn danger" onclick="deleteClass('${escapeJs(name)}')">İlacı Sil</button>
+          </td>`;
         body.appendChild(tr);
+
+        const imagesTr = document.createElement("tr");
+        imagesTr.className = "images-row";
+        imagesTr.id = "images_" + safeId;
+        imagesTr.style.display = "none";
+        imagesTr.innerHTML = `<td colspan="4">
+          <div class="image-grid" id="grid_${safeId}"></div>
+          <div class="images-actions">
+            <button class="row-btn danger" onclick="deleteSelectedImages('${escapeJs(name)}', '${safeId}')">Seçilenleri Sil</button>
+            <span id="status_${safeId}" style="font-size:13px; color:#666;"></span>
+          </div>
+        </td>`;
+        body.appendChild(imagesTr);
       });
     } catch (e) {
       console.error(e);
+    }
+  }
+
+  function escapeJs(s) {
+    return s.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+  }
+
+  async function toggleClassImages(className, safeId) {
+    const row = document.getElementById("images_" + safeId);
+    const isHidden = row.style.display === "none";
+    row.style.display = isHidden ? "table-row" : "none";
+    if (isHidden) {
+      await loadClassImages(className, safeId);
+    }
+  }
+
+  async function loadClassImages(className, safeId) {
+    const grid = document.getElementById("grid_" + safeId);
+    grid.innerHTML = '<span class="empty-note">Yükleniyor...</span>';
+    try {
+      const res = await fetch(`/api/dataset_images?class_name=${encodeURIComponent(className)}`);
+      const data = await res.json();
+      if (!res.ok) {
+        grid.innerHTML = `<span class="empty-note">${data.detail || "Hata"}</span>`;
+        return;
+      }
+      if (data.files.length === 0) {
+        grid.innerHTML = '<span class="empty-note">Bu klasörde görüntü yok.</span>';
+        return;
+      }
+      grid.innerHTML = data.files.map(f => `
+        <label>
+          <input type="checkbox" value="${f}" style="display:none;" />
+          <img src="/dataset_files/${encodeURIComponent(className)}/${encodeURIComponent(f)}" loading="lazy" />
+          ${f}
+        </label>
+      `).join("");
+    } catch (e) {
+      grid.innerHTML = `<span class="empty-note">Bağlantı hatası: ${e}</span>`;
+    }
+  }
+
+  async function deleteSelectedImages(className, safeId) {
+    const grid = document.getElementById("grid_" + safeId);
+    const status = document.getElementById("status_" + safeId);
+    const checked = Array.from(grid.querySelectorAll("input[type=checkbox]:checked")).map(cb => cb.value);
+    if (checked.length === 0) {
+      alert("Silmek için en az bir görüntü seçin (görüntüye tıklayarak işaretleyin).");
+      return;
+    }
+    if (!confirm(`${checked.length} görüntü silinsin mi?`)) return;
+
+    status.textContent = "Siliniyor...";
+    try {
+      const res = await fetch("/api/dataset_delete_images", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ class_name: className, filenames: checked }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        status.textContent = `${data.deleted.length} görüntü silindi.`;
+        await loadClassImages(className, safeId);
+        loadDatasetSummary();
+      } else {
+        status.textContent = "Hata: " + (data.detail || JSON.stringify(data));
+      }
+    } catch (e) {
+      status.textContent = "Bağlantı hatası: " + e;
+    }
+  }
+
+  async function deleteClass(className) {
+    if (!confirm(`"${className}" ilacına ait TÜM görüntüler (orijinal + artırılmış) kalıcı olarak silinsin mi?`)) return;
+    try {
+      const res = await fetch("/api/dataset_delete_class", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ class_name: className }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        loadDatasetSummary();
+      } else {
+        alert("Hata: " + (data.detail || JSON.stringify(data)));
+      }
+    } catch (e) {
+      alert("Bağlantı hatası: " + e);
     }
   }
 
@@ -102,6 +222,7 @@
         log.textContent = Object.entries(data.per_class)
           .map(([k, v]) => `${k}: ${v.original} orijinal -> ${v.generated} üretildi`)
           .join("\n");
+        loadDatasetSummary();
       } else {
         status.textContent = "Hata: " + (data.detail || JSON.stringify(data));
       }

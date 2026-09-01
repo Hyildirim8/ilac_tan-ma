@@ -25,7 +25,7 @@
 // WiFi ve sunucu ayarları (WiFi bilgileri secrets.h'ten gelir, git'e girmez)
 const char* ssid = WIFI_SSID;
 const char* password = WIFI_PASSWORD;
-const char* serverName = "http://10.42.101.48:5050/upload_esp"; // FastAPI endpoint (web/ Docker servisi, host port 5050)
+const char* serverName = "http://10.42.101.27:5050/upload_esp"; // FastAPI endpoint (web/ Docker servisi, host port 5050)
 
 // Flash kontrol
 #define FLASH_GPIO 4   // ESP32-CAM üzerindeki LED
@@ -72,8 +72,9 @@ void startCamera() {
 
 void setup() {
   Serial.begin(115200);
+
+  pinMode(FLASH_GPIO, OUTPUT);
   
-  digitalWrite(FLASH_GPIO, HIGH); // Flash aç
 
   // WiFi bağlan
   WiFi.begin(ssid, password);
@@ -88,26 +89,37 @@ void setup() {
 }
 
 void loop() {
-  if ((WiFi.status() == WL_CONNECTED)) {
+  if (WiFi.status() == WL_CONNECTED) {
+    digitalWrite(FLASH_GPIO, HIGH);
+    delay(150); // sensörün flaşa göre pozlamayı ayarlaması için kısa bekleme
+
+    // Flaş açılmadan önce tamponda bekleyen eski kareyi at, yoksa
+    // fotoğrafta flaş görünmüyor (zamanlama kayması).
+    camera_fb_t * stale_fb = esp_camera_fb_get();
+    if (stale_fb) {
+      esp_camera_fb_return(stale_fb);
+    }
+
     camera_fb_t * fb = esp_camera_fb_get();
-    if(!fb) {
+    digitalWrite(FLASH_GPIO, LOW);
+
+    if (!fb) {
       Serial.println("Camera capture failed");
-      return;
-    }
-
-    HTTPClient http;
-    http.begin(serverName);
-    http.addHeader("Content-Type", "image/jpeg");
-
-    int httpResponseCode = http.POST(fb->buf, fb->len);
-    if(httpResponseCode>0){
-      Serial.printf("Image sent, response: %d\n", httpResponseCode);
     } else {
-      Serial.printf("Error sending image: %s\n", http.errorToString(httpResponseCode).c_str());
-    }
+      HTTPClient http;
+      http.begin(serverName);
+      http.addHeader("Content-Type", "image/jpeg");
 
-    http.end();
-    esp_camera_fb_return(fb);
+      int httpResponseCode = http.POST(fb->buf, fb->len);
+      if (httpResponseCode > 0) {
+        Serial.printf("Image sent, response: %d\n", httpResponseCode);
+      } else {
+        Serial.printf("Error sending image: %s\n", http.errorToString(httpResponseCode).c_str());
+      }
+
+      http.end();
+      esp_camera_fb_return(fb);
+    }
   }
 
   delay(5000); // 5 saniyede bir gönder

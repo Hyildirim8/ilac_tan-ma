@@ -19,7 +19,7 @@ env/
 
 # Datasets (regenerate via veri_arttırma/veri_seti.py, or keep out of git)
 veri_arttırma/augmented_dataset/
-web/dataset/
+
 web/augmented_dataset/
 
 # Runtime-uploaded / captured images

@@ -159,6 +159,34 @@ def ensemble_predict(image_path):
 print("Modeller yükleniyor...")
 load_all_models()
 
+# Aynı anda tek tahmin çalışsın diye; bir tahmin sürerken gelen yeni
+# karelerin tahmini atlanır (görüntü akışını yavaşlatmamak için).
+prediction_lock = threading.Lock()
+
+
+def _run_prediction_job(upload_path, timestamp):
+    global last_prediction
+    if not prediction_lock.acquire(blocking=False):
+        return
+    try:
+        ensemble_results = ensemble_predict(upload_path)
+        best_result = ensemble_results["best_individual"]
+        average_result = ensemble_results["ensemble_average"]
+        final_result = best_result if best_result["confidence"] > 0.8 else average_result
+
+        last_prediction = {
+            "class": final_result["class"],
+            "confidence": round(final_result["confidence"], 4),
+            "timestamp": timestamp,
+            "image_path": "/uploads/latest_image.jpg",
+            "ensemble_details": ensemble_results,
+            "method": final_result.get("method", "ensemble"),
+        }
+    except Exception as e:
+        print(f"Tahmin hatası: {e}")
+    finally:
+        prediction_lock.release()
+
 # ---- Model eğitimi (web sayfasından tetiklenir) ----
 
 training_lock = threading.Lock()
@@ -437,30 +465,22 @@ async def upload_esp(request: Request):
         result = {"status": "ok", "saved": LATEST_PATH, "timestamp": timestamp}
 
         if models_ensemble:
-            try:
-                ensemble_results = ensemble_predict(upload_path)
-                best_result = ensemble_results["best_individual"]
-                average_result = ensemble_results["ensemble_average"]
-                final_result = best_result if best_result["confidence"] > 0.8 else average_result
-
-                last_prediction = {
-                    "class": final_result["class"],
-                    "confidence": round(final_result["confidence"], 4),
-                    "timestamp": timestamp,
-                    "image_path": "/uploads/latest_image.jpg",
-                    "ensemble_details": ensemble_results,
-                    "method": final_result.get("method", "ensemble"),
-                }
-                result["prediction"] = last_prediction
-            except Exception as e:
-                print(f"Tahmin hatası: {e}")
+            # Tahmin (8 modelli ensemble) saniyeler sürebiliyor; ESP32'nin
+            # cevabı beklemeden bir sonraki kareyi göndermeye devam edebilmesi
+            # için arka planda ayrı thread'de çalıştırılır, burada beklenmez.
+            threading.Thread(
+                target=_run_prediction_job, args=(upload_path, timestamp), daemon=True
+            ).start()
 
         return JSONResponse(result)
     except Exception as e:
         return JSONResponse({"status": "error", "detail": str(e)}, status_code=400)
 
 
-# Web arayüzden "Kaydet" butonuna basınca en son görüntü veri setine kopyalanır
+# Web arayüzden "Kaydet" butonuna basınca en son görüntü veri setine kopyalanır.
+# Sıralı sayaç (dosya sayısı + 1) silinen dosyalar yüzünden mevcut bir
+# dosyanın üstüne yazabiliyordu; bunun yerine her kayıt mikrosaniyeye kadar
+# benzersiz bir zaman damgasıyla adlandırılır, çakışma imkânsız hale gelir.
 @app.post("/save")
 async def save_image(drug_name: str = Form(...)):
     if not os.path.exists(LATEST_PATH):
@@ -468,8 +488,8 @@ async def save_image(drug_name: str = Form(...)):
     safe_name = "".join(c for c in drug_name if c.isalnum() or c in (" ", "_", "-")).strip().replace(" ", "_")
     folder = os.path.join(DATASET_DIR, safe_name)
     os.makedirs(folder, exist_ok=True)
-    count = len([f for f in os.listdir(folder) if f.lower().endswith((".jpg", ".jpeg", ".png"))])
-    dest = os.path.join(folder, f"{count + 1}.jpg")
+    filename = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f") + ".jpg"
+    dest = os.path.join(folder, filename)
     shutil.copy(LATEST_PATH, dest)
     return JSONResponse({"status": "ok", "saved_to": dest})
 
@@ -573,7 +593,7 @@ async def model_results():
 
 
 def _run_augmentation():
-    from tensorflow.keras.preprocessing.image import ImageDataGenerator, load_img, img_to_array
+    from tensorflow.keras.preprocessing.image import ImageDataGenerator, load_img, img_to_array, array_to_img
 
     datagen = ImageDataGenerator(
         rotation_range=30,
@@ -613,8 +633,15 @@ def _run_augmentation():
             x = img_to_array(img)
             x = x.reshape((1,) + x.shape)
 
+            # Keras'ın save_to_dir'i dosya adına rastgele 0-9999 arası bir sayı
+            # ekliyor; binlerce görüntü üretilince bu sayı çakışıp önceki
+            # dosyanın üstüne yazılabiliyordu. Bunun yerine kaynak dosya adına
+            # dayalı benzersiz isimle kendimiz kaydediyoruz.
+            base_name = os.path.splitext(img_name)[0]
             i = 0
-            for _ in datagen.flow(x, batch_size=1, save_to_dir=save_path, save_prefix="aug", save_format="jpg"):
+            for batch in datagen.flow(x, batch_size=1):
+                aug_img = array_to_img(batch[0])
+                aug_img.save(os.path.join(save_path, f"aug_{base_name}_{i}.jpg"), format="JPEG")
                 i += 1
                 if i >= 10:
                     break
@@ -627,11 +654,23 @@ def _run_augmentation():
 
 
 # Web arayüzden tetiklenen veri artırma — dataset/ içindeki her görüntüden
-# döndürme/kaydırma/yakınlaştırma/parlaklık varyasyonları üretir.
+# döndürme/kaydırma/yakınlaştırma/parlaklık varyasyonları üretir. Kilit
+# olmadan çift tıklama/sayfa yenileme ile aynı anda iki çalıştırma
+# başlayıp birbirinin ürettiği dosyaları silip yeniden üreterek sonsuza
+# yakın sürüp gidebiliyordu.
+augment_lock = threading.Lock()
+
+
 @app.post("/augment")
 async def augment():
+    if augment_lock.locked():
+        return JSONResponse(
+            {"status": "error", "detail": "Veri artırma zaten çalışıyor, bitmesini bekleyin."},
+            status_code=409,
+        )
     try:
-        result = await run_in_threadpool(_run_augmentation)
+        with augment_lock:
+            result = await run_in_threadpool(_run_augmentation)
         return JSONResponse({"status": "ok", **result})
     except Exception as e:
         return JSONResponse({"status": "error", "detail": str(e)}, status_code=500)

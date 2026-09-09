@@ -25,7 +25,7 @@
 // WiFi ve sunucu ayarları (WiFi bilgileri secrets.h'ten gelir, git'e girmez)
 const char* ssid = WIFI_SSID;
 const char* password = WIFI_PASSWORD;
-const char* serverName = "http://10.42.101.27:5050/upload_esp"; // FastAPI endpoint (web/ Docker servisi, host port 5050)
+const char* serverName = "http://10.42.101.82:5050/upload_esp"; // FastAPI endpoint (web/ Docker servisi, host port 5050)
 
 // Flash kontrol
 #define FLASH_GPIO 4   // ESP32-CAM üzerindeki LED
@@ -77,31 +77,32 @@ void setup() {
   
 
   // WiFi bağlan
+  WiFi.mode(WIFI_STA);
+  WiFi.disconnect(true);
+  delay(100);
   WiFi.begin(ssid, password);
   Serial.print("WiFi connecting");
+
+  unsigned long startAttempt = millis();
   while (WiFi.status() != WL_CONNECTED) {
+    if (millis() - startAttempt > 20000) {
+      Serial.printf("\nWiFi connect timeout, status code: %d\n", WiFi.status());
+      Serial.println("Restarting...");
+      delay(2000);
+      ESP.restart();
+    }
     delay(500);
     Serial.print(".");
   }
-  Serial.println("\nWiFi connected!");
+  Serial.print("\nWiFi connected! IP: ");
+  Serial.println(WiFi.localIP());
 
   startCamera();
 }
 
 void loop() {
   if (WiFi.status() == WL_CONNECTED) {
-    digitalWrite(FLASH_GPIO, HIGH);
-    delay(150); // sensörün flaşa göre pozlamayı ayarlaması için kısa bekleme
-
-    // Flaş açılmadan önce tamponda bekleyen eski kareyi at, yoksa
-    // fotoğrafta flaş görünmüyor (zamanlama kayması).
-    camera_fb_t * stale_fb = esp_camera_fb_get();
-    if (stale_fb) {
-      esp_camera_fb_return(stale_fb);
-    }
-
     camera_fb_t * fb = esp_camera_fb_get();
-    digitalWrite(FLASH_GPIO, LOW);
 
     if (!fb) {
       Serial.println("Camera capture failed");
@@ -109,6 +110,7 @@ void loop() {
       HTTPClient http;
       http.begin(serverName);
       http.addHeader("Content-Type", "image/jpeg");
+      http.setTimeout(8000);
 
       int httpResponseCode = http.POST(fb->buf, fb->len);
       if (httpResponseCode > 0) {
@@ -122,5 +124,5 @@ void loop() {
     }
   }
 
-  delay(5000); // 5 saniyede bir gönder
+  delay(500); // 0.5 saniyede bir gönder
 }

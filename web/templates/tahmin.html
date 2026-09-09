@@ -82,7 +82,7 @@
 
       <div style="text-align: center">
         <button class="refresh-btn" onclick="refreshAll()">Yenile</button>
-        <button class="refresh-btn" onclick="toggleAutoRefresh()" id="autoRefreshBtn">Otomatik Yenileme</button>
+        <button class="refresh-btn" onclick="toggleAutoRefresh()" id="autoRefreshBtn">Durdur</button>
       </div>
     </div>
   </div>
@@ -90,7 +90,7 @@
 {% block scripts %}
 <script>
   let autoRefreshInterval = null;
-  let isAutoRefreshOn = false;
+  let isAutoRefreshOn = true;
 
   function refreshPreview() {
     document.getElementById("preview").src = `/latest.jpg?t=${Date.now()}`;
@@ -171,7 +171,7 @@
       btn.textContent = "Otomatik Yenileme";
       isAutoRefreshOn = false;
     } else {
-      autoRefreshInterval = setInterval(refreshAll, 2000);
+      autoRefreshInterval = setInterval(refreshAll, 1000);
       btn.textContent = "Durdur";
       isAutoRefreshOn = true;
     }
@@ -179,6 +179,7 @@
 
   window.onload = function () {
     refreshAll();
+    autoRefreshInterval = setInterval(refreshAll, 1000);
   };
 </script>
 {% endblock %}

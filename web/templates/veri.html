@@ -236,22 +236,28 @@
   document.getElementById("saveBtn").addEventListener("click", async () => {
     const drug = document.getElementById("drug_name").value.trim();
     if (!drug) { alert("İlaç adı gir."); return; }
-    const form = new FormData();
-    form.append("drug_name", drug);
-    const res = await fetch("/save", { method: "POST", body: form });
-    const j = await res.json();
-    if (res.ok) {
-      alert("Kaydedildi: " + j.saved_to);
-      loadDatasetSummary();
-    } else {
-      alert("Hata: " + (j.detail || JSON.stringify(j)));
+    const btn = document.getElementById("saveBtn");
+    btn.disabled = true;
+    try {
+      const form = new FormData();
+      form.append("drug_name", drug);
+      const res = await fetch("/save", { method: "POST", body: form });
+      const j = await res.json();
+      if (res.ok) {
+        alert("Kaydedildi: " + j.saved_to);
+        loadDatasetSummary();
+      } else {
+        alert("Hata: " + (j.detail || JSON.stringify(j)));
+      }
+    } finally {
+      btn.disabled = false;
     }
   });
 
   window.onload = function () {
     refreshPreview();
     loadDatasetSummary();
-    setInterval(refreshPreview, 3000);
+    setInterval(refreshPreview, 1000);
   };
 </script>
 {% endblock %}

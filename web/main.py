@@ -371,23 +371,41 @@ async def import_model(files: List[UploadFile] = File(...)):
     rejected = []
     new_results = {}
 
-    for upload in files:
-        name = os.path.basename(upload.filename or "")
-        if not _IMPORT_FILENAME_RE.match(name):
-            rejected.append(upload.filename)
-            continue
-
-        contents = await upload.read()
-        dest = os.path.join(MODEL_DIR, name)
+    def handle_entry(name, contents):
+        # Zip içindeki klasör yapısını (ör. model_output/, graphs/) yok sayıp
+        # yalnızca dosya adına bakılır; grafik PNG'leri ve tanınmayan
+        # dosyalar reddedilenler listesine düşer.
+        base_name = os.path.basename(name)
+        if not base_name or not _IMPORT_FILENAME_RE.match(base_name):
+            rejected.append(name)
+            return
+        dest = os.path.join(MODEL_DIR, base_name)
         with open(dest, "wb") as f:
             f.write(contents)
-        imported.append(name)
+        imported.append(base_name)
 
-        if name == "model_results.json":
+        if base_name == "model_results.json":
+            nonlocal new_results
             try:
                 new_results = json.loads(contents)
             except Exception:
                 new_results = {}
+
+    for upload in files:
+        name = upload.filename or ""
+        contents = await upload.read()
+
+        if name.lower().endswith(".zip"):
+            try:
+                with zipfile.ZipFile(io.BytesIO(contents)) as zf:
+                    for entry in zf.namelist():
+                        if entry.endswith("/"):
+                            continue
+                        handle_entry(entry, zf.read(entry))
+            except zipfile.BadZipFile:
+                rejected.append(name)
+        else:
+            handle_entry(name, contents)
 
     if new_results:
         results_path = os.path.join(MODEL_DIR, "model_results.json")

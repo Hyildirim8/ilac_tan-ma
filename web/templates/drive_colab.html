@@ -35,8 +35,8 @@
       <li><a href="https://colab.research.google.com" target="_blank" rel="noopener">colab.research.google.com</a> üzerinden
         <em>Dosya &gt; Not defteri yükle</em> ile açın.</li>
       <li>Çalışma zamanı türünü GPU yapıp hücreleri sırayla çalıştırın.</li>
-      <li>Eğitim bitince inen <code>model_output.zip</code>'i açıp içindeki dosyaları
-        aşağıdaki "Eğitilen Modeli İçeri Al" formuna sürükleyin.</li>
+      <li>Eğitim bitince inen <code>model_output.zip</code>'i açmadan doğrudan
+        aşağıdaki "Eğitilen Modeli İçeri Al" formuna verin.</li>
     </ol>
     {% if colab_notebook_available %}
     <a class="refresh-btn blue" href="/colab/notebook" download style="text-decoration:none; display:inline-block;">📓 Colab Notebook'u İndir</a>
@@ -48,11 +48,12 @@
   <div class="box import-box">
     <div class="section-title">Eğitilen Modeli İçeri Al</div>
     <p style="font-size:14px; color:#333; margin-top:0;">
-      Colab'dan indirdiğiniz <code>ilac_model_*.h5</code>, <code>class_names_*.json</code>
-      ve <code>model_results.json</code> dosyalarını seçin — <code>web/model/</code> içine
-      kaydedilir ve modeller anında tahmin için yeniden yüklenir.
+      Colab'dan indirdiğiniz <code>model_output.zip</code>'i açmadan doğrudan seçin
+      (içindeki <code>ilac_model_*.h5</code>, <code>class_names_*.json</code> ve
+      <code>model_results.json</code> otomatik ayıklanır), veya dosyaları tek tek seçin —
+      <code>web/model/</code> içine kaydedilir ve modeller anında tahmin için yeniden yüklenir.
     </p>
-    <input type="file" id="modelFiles" class="file-input" multiple accept=".h5,.json" />
+    <input type="file" id="modelFiles" class="file-input" multiple accept=".h5,.json,.zip" />
     <button class="refresh-btn" onclick="importModels()">İçeri Al</button>
     <div class="result-log" id="importLog"></div>
   </div>
